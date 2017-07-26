@@ -20,6 +20,7 @@ from ggrc_workflows.converters import IMPORTABLE, EXPORTABLE
 from ggrc_workflows.converters.handlers import COLUMN_HANDLERS
 from ggrc_workflows.services.common import Signals
 from ggrc_workflows.services import workflow_cycle_calculator
+from ggrc_workflows.services import cycle_calculator
 from ggrc_workflows.roles import (
     WorkflowOwner, WorkflowMember, BasicWorkflowReader, WorkflowBasicReader,
     WorkflowEditor
@@ -190,35 +191,50 @@ def handle_cycle_post(sender, obj=None, src=None, service=None):  # noqa pylint:
     # When called via a REST POST, use current user.
     current_user = get_current_user()
     workflow = obj.workflow
-    obj.calculator = workflow_cycle_calculator.get_cycle_calculator(workflow)
+    setup_cycle_start_date = cycle_calculator.get_setup_cycle_start_date(
+      workflow)
+    if not workflow.next_cycle_start_date:
+      workflow.next_cycle_start_date = setup_cycle_start_date
+      db.session.add(workflow)
 
-    if workflow.non_adjusted_next_cycle_start_date:
-      base_date = workflow.non_adjusted_next_cycle_start_date
-    else:
-      base_date = date.today()
-    build_cycle(obj, current_user=current_user, base_date=base_date)
+    obj.workflow = workflow
+    obj.context = workflow.context
+    # Should be calculated if needed. Check notifications. Is it needed?
+    obj.start_date = date.today()
 
-    adjust_next_cycle_start_date(obj.calculator, workflow, move_forward=True)
-    update_workflow_state(workflow)
+    build_cycle(obj, current_user)
+    workflow.repeat_multiplier += 1
+    workflow.next_cycle_start_date = (
+      cycle_calculator.calc_next_cycle_start_date(workflow,
+                                                  setup_cycle_start_date))
     db.session.add(workflow)
 
+    while workflow.next_cycle_start_date <= date.today():
+      cycle = models.Cycle()
+      cycle.workflow = workflow
+      cycle.context = workflow.context
+      cycle.start_date = date.today()
 
-def _create_cycle_task(task_group_task, cycle, cycle_task_group,
-                       current_user, base_date=None):
+      build_cycle(cycle, current_user)
+      workflow.repeat_multiplier += 1
+
+      workflow.next_cycle_start_date = (
+        cycle_calculator.calc_next_cycle_start_date(workflow,
+                                                    setup_cycle_start_date))
+
+      db.session.add(workflow)
+    # Fix next function:
+    # update_workflow_state(workflow)
+
+
+
+def _create_cycle_task(task_group_task, cycle, cycle_task_group, current_user):
   """Create a cycle task along with relations to other objects"""
-  # TaskGroupTasks for one_time workflows don't save relative start/end
-  # month/day. They only saves start and end dates.
-  # TaskGroupTasks for all other workflow frequencies save the relative
-  # start/end days.
-  if not base_date:
-    base_date = date.today()
-
   description = models.CycleTaskGroupObjectTask.default_description if \
       task_group_task.object_approval else task_group_task.description
 
-  date_range = cycle.calculator.task_date_range(
-      task_group_task, base_date=base_date)
-  start_date, end_date = date_range
+  start_date, end_date = cycle_calculator.calc_next_cycle_task_dates(
+      cycle.workflow, task_group_task)
 
   cycle_task_group_object_task = models.CycleTaskGroupObjectTask(
       context=cycle.context,
@@ -239,8 +255,7 @@ def _create_cycle_task(task_group_task, cycle, cycle_task_group,
   return cycle_task_group_object_task
 
 
-def create_old_style_cycle(cycle, task_group, cycle_task_group, current_user,
-                           base_date):
+def create_old_style_cycle(cycle, task_group, cycle_task_group, current_user):
   """ This function preserves the old style of creating cycles, so each object
   gets its own task assigned to it.
   """
@@ -248,23 +263,20 @@ def create_old_style_cycle(cycle, task_group, cycle_task_group, current_user,
     for task_group_task in task_group.task_group_tasks:
       cycle_task_group_object_task = _create_cycle_task(
           task_group_task, cycle, cycle_task_group,
-          current_user, base_date)
+          current_user)
 
   for task_group_object in task_group.task_group_objects:
     object_ = task_group_object.object
     for task_group_task in task_group.task_group_tasks:
       cycle_task_group_object_task = _create_cycle_task(
           task_group_task, cycle, cycle_task_group,
-          current_user, base_date)
+          current_user)
       db.session.add(Relationship(source=cycle_task_group_object_task,
                                   destination=object_))
 
 
-def build_cycle(cycle, current_user=None, base_date=None):
+def build_cycle(cycle, current_user=None):
   """Build a cycle with it's child objects"""
-
-  if not base_date:
-    base_date = date.today()
 
   # Determine the relevant Workflow
   workflow = cycle.workflow
@@ -301,19 +313,18 @@ def build_cycle(cycle, current_user=None, base_date=None):
     # preserve the old cycle creation for old workflows, so each object
     # gets its own cycle task
     if workflow.is_old_workflow:
-      create_old_style_cycle(cycle, task_group, cycle_task_group, current_user,
-                             base_date)
+      create_old_style_cycle(cycle, task_group, cycle_task_group, current_user)
     else:
       for task_group_task in task_group.task_group_tasks:
         cycle_task_group_object_task = _create_cycle_task(
-            task_group_task, cycle, cycle_task_group, current_user, base_date)
+            task_group_task, cycle, cycle_task_group, current_user)
 
         for task_group_object in task_group.task_group_objects:
           object_ = task_group_object.object
           db.session.add(Relationship(source=cycle_task_group_object_task,
                                       destination=object_))
 
-  update_cycle_dates(cycle)
+  # update_cycle_dates(cycle)
 
   Signals.workflow_cycle_start.send(
       cycle.__class__,
@@ -674,7 +685,8 @@ def _validate_put_workflow_fields(workflow):
 def handle_workflow_put(
         sender, obj=None, src=None, service=None):  # noqa pylint: disable=unused-argument  # noqa pylint: disable=unused-argument
   _validate_put_workflow_fields(obj)
-  update_workflow_state(obj)
+  # Update next function:
+  # update_workflow_state(obj)
 
 
 @signals.Restful.model_posted.connect_via(models.CycleTaskEntry)
@@ -892,8 +904,6 @@ def init_extra_views(app):
 
 
 def start_recurring_cycles():
-  # Get all workflows that should start a new cycle today
-  # The next_cycle_start_date is precomputed and stored when a cycle is created
   today = date.today()
   workflows = db.session.query(models.Workflow)\
       .filter(
@@ -901,35 +911,11 @@ def start_recurring_cycles():
       models.Workflow.recurrences == True  # noqa
   ).all()
 
-  # For each workflow, start and save a new cycle.
   for workflow in workflows:
-    cycle = models.Cycle()
-    cycle.workflow = workflow
-    cycle.calculator = workflow_cycle_calculator.get_cycle_calculator(workflow)
-    cycle.context = workflow.context
-    # We can do this because we selected only workflows with
-    # next_cycle_start_date = today
-    cycle.start_date = date.today()
-
-    # Flag the cycle to be saved
-    db.session.add(cycle)
-
-    if workflow.non_adjusted_next_cycle_start_date:
-      base_date = workflow.non_adjusted_next_cycle_start_date
-    else:
-      base_date = date.today()
-
-    # Create the cycle (including all child objects)
-    build_cycle(cycle, base_date=base_date)
-
-    # Update the workflow next_cycle_start_date to push it ahead based on the
-    # frequency.
-    adjust_next_cycle_start_date(cycle.calculator, workflow, move_forward=True)
-
-    db.session.add(workflow)
-
-    notification.handle_workflow_modify(None, workflow)
+    # Follow same steps as in model_posted.connect_via(models.Cycle)
+    cycle = None
     notification.handle_cycle_created(None, obj=cycle)
+    notification.handle_workflow_modify(None, workflow)
 
   log_event(db.session)
   db.session.commit()
@@ -953,7 +939,6 @@ def get_cycles(workflow):
 def adjust_next_cycle_start_date(
         calculator,
         workflow,
-        base_date=None,
         move_forward=False):
   """Sets new cycle start date - it either recalculates a start date or moves
   it forward one interval if manual cycle start was requested or cycle
