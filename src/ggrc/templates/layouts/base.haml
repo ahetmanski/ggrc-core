@@ -14,9 +14,8 @@
       -block title
         Governance, Risk and Compliance
 
-    -assets "dashboard-css"
-      %link{ rel:'stylesheet', type:'text/css', href:"={ASSET_URL|with_static_subdomain}" }
-    -endassets
+    %link{ rel:'stylesheet', type:'text/css', href:'{{config.get("DASHBOARD_CSS_PATH")}}' }
+    %link{ rel:'stylesheet', type:'text/css', href:'{{config.get("VENDOR_CSS_PATH")}}' }
 
     %link{ 'href': '={ url_for("static", filename="favicon.ico") }', 'rel':'icon', 'type':'image/x-icon' }
 
@@ -48,15 +47,8 @@
 
     -block extra_templates
 
-    -assets "dashboard-js"
-      %script{ type:'text/javascript', src:"={ASSET_URL|with_static_subdomain}" }
-    -endassets
-
-    -block extra_assets
-
-    -assets "app-init-js"
-      %script{ type:'text/javascript', src:"={ASSET_URL|with_static_subdomain}" }
-    -endassets
+    %script{ type:'text/javascript', src:'{{config.get("VENDOR_JS_PATH")}}' }
+    %script{ type:'text/javascript', src:'{{config.get("DASHBOARD_JS_PATH")}}' }
 
     :javascript
       GGRC.Tracker.timing("dashboard", "exec_scripts", Date.now() - st, "dashboard.js finished executing");

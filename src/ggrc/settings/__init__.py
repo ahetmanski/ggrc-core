@@ -13,6 +13,7 @@ Environment/deployment-specific settings should go in
 `settings.<environment_name>`.
 """
 
+import json
 import os
 
 BASE_DIR = os.path.realpath(os.path.join(
@@ -21,8 +22,21 @@ MODULE_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
 SETTINGS_DIR = os.path.join(BASE_DIR, 'ggrc', 'settings')
 THIRD_PARTY_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'third_party'))
 BOWER_DIR = os.path.realpath(os.path.join(BASE_DIR, '..', 'bower_components'))
+MANIFEST_CFG_PATH = os.path.join(BASE_DIR, 'ggrc', 'static', 'manifest.json')
 
 from ggrc.settings.default import *  # noqa
+
+try:
+  manifest_data = json.load(open(MANIFEST_CFG_PATH))  # noqa # pylint: disable=invalid-name
+  DASHBOARD_CSS_PATH = manifest_data['dashboard.css']
+  DASHBOARD_JS_PATH = manifest_data['dashboard.js']
+  VENDOR_CSS_PATH = manifest_data['vendor.css']
+  VENDOR_JS_PATH = manifest_data['vendor.js']
+except (KeyError, IOError):
+  raise RuntimeError("File '{}' with JS configuration should exist. "
+                     "Next keys should be present there: "
+                     "'dashboard.css, dashboard.js, vendor.css, "
+                     "vendor.js'.".format(MANIFEST_CFG_PATH))
 
 SETTINGS_MODULE = os.environ.get("GGRC_SETTINGS_MODULE", '')
 CUSTOM_URL_ROOT = os.environ.get("GGRC_CUSTOM_URL_ROOT")
