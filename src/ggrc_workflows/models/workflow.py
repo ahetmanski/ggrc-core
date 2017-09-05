@@ -24,8 +24,10 @@ from ggrc.models import reflection
 from ggrc.models.associationproxy import association_proxy
 from ggrc.models.context import HasOwnContext
 from ggrc.models.deferred import deferred
+from ggrc_basic_permissions import models as bp_models
 from ggrc_workflows.models import cycle
 from ggrc_workflows.models import cycle_task_group
+from ggrc_workflows.models import workflow_person
 from ggrc_workflows.services import google_holidays
 
 
@@ -280,13 +282,11 @@ class Workflow(mixins.CustomAttributable, HasOwnContext, mixins.Timeboxed,
       },
       "workflow_owner": {
           "display_name": "Manager",
-          "type": reflection.AttributeInfo.Type.USER_ROLE,
           "mandatory": True,
           "filter_by": "_filter_by_workflow_owner",
       },
       "workflow_member": {
           "display_name": "Member",
-          "type": reflection.AttributeInfo.Type.USER_ROLE,
           "filter_by": "_filter_by_workflow_member",
       },
       "status": None,
@@ -426,6 +426,36 @@ class Workflow(mixins.CustomAttributable, HasOwnContext, mixins.Timeboxed,
     indexer = get_indexer()
     indexer.create_record(indexer.fts_record_for(backlog_workflow))
     return "Backlog workflow created"
+
+  def add_user_role(self, person, role_name):
+    """Add user role to person.
+
+    Args:
+      person: Person object where user role should be added
+      role_name: Workflow user role name
+    """
+    db.session.add(bp_models.UserRole(
+        person=person,
+        role=db.session.query(
+            bp_models.Role).filter(bp_models.Role.name == role_name).first(),
+        context=self.context,
+        modified_by=get_current_user(),
+    ))
+
+  def add_workflow_person(self, person, role_name):
+    """Add person to Workflow with appropriate role.
+
+    Args:
+      person: Person object to add
+      role_name: Workflow user role name
+    """
+    db.session.add(workflow_person.WorkflowPerson(
+        workflow=self,
+        person=person,
+        context=self.context,
+        modified_by=get_current_user(),
+    ))
+    self.add_user_role(person, role_name)
 
 
 class WorkflowState(object):

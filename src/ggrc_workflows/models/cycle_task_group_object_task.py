@@ -30,6 +30,7 @@ class CycleTaskGroupObjectTask(mixins.WithContact,
                                relationship.Relatable,
                                mixins.Notifiable,
                                mixins.Described,
+                               wf_mixins.CheckMappedContact,
                                mixins.Titled,
                                mixins.Slugged,
                                mixins.Base,
@@ -329,6 +330,10 @@ class CycleTaskGroupObjectTask(mixins.WithContact,
             "id"
         ),
     )
+
+  @property
+  def workflow(self):
+    return getattr(self.cycle, 'workflow', None)
 
 
 class CycleTaskable(object):

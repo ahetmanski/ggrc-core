@@ -831,3 +831,41 @@ ExportOnlyUserColumnHandler = type(
     (ExportOnlyColumnHandler, UserColumnHandler),
     {}
 )
+
+
+class ForkColumnHandler(object):
+  """Helper for spliting column handlers with same name by object type."""
+
+  class StubColumnHandler(ColumnHandler):
+    """Stub column handler which does nothing"""
+
+  def parse_item(self):
+    pass
+
+  def set_obj_attr(self):
+    pass
+
+  def get_value(self):
+    pass
+
+  def insert_object(self):
+    pass
+
+  def set_value(self):
+    pass
+
+  default_handler = StubColumnHandler
+  handler_mapping = {}
+
+  def __init__(self, row_converter, key, **kwargs):
+    self.handler = self.handler_mapping.get(
+        type(row_converter.obj),
+        self.default_handler
+    )(row_converter, key, **kwargs)
+
+  def __getattribute__(self, attr):
+    __class__ = super(ForkColumnHandler, self).__getattribute__('__class__')
+    if attr in __class__.__dict__:
+      return getattr(__class__, attr)
+    handler = super(ForkColumnHandler, self).__getattribute__('handler')
+    return getattr(handler, attr)

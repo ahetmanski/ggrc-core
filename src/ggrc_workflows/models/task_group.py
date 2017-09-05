@@ -16,11 +16,12 @@ from ggrc.models.mixins import (
 from ggrc.models.reflection import AttributeInfo
 from ggrc.models import reflection
 from ggrc.models import all_models
+from ggrc_workflows.models import mixins as wf_mixins
 from ggrc_workflows.models.task_group_object import TaskGroupObject
 
 
-class TaskGroup(
-        WithContact, Timeboxed, Described, Titled, Slugged, Indexed, db.Model):
+class TaskGroup(WithContact, Timeboxed, Described, Titled,
+                wf_mixins.CheckMappedContact, Slugged, Indexed, db.Model):
   """Workflow TaskGroup model."""
 
   __tablename__ = 'task_groups'

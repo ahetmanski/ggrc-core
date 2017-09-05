@@ -419,7 +419,7 @@ def update_cycle_task_object_task_parent_state(obj, is_put=False):
   update_cycle_task_group_parent_state(obj.cycle_task_group)
 
 
-def update_cycle_task_group_parent_state(obj):
+def update_cycle_task_group_parent_state(obj):  # noqa pylint: disable=invalid-name
   """Update cycle status for sent cycle task group"""
   if obj.cycle.workflow.kind == "Backlog":
     return
@@ -435,43 +435,23 @@ def update_cycle_task_group_parent_state(obj):
   )
 
 
-def ensure_assignee_is_workflow_member(workflow, assignee):
+def ensure_assignee_is_workflow_member(obj):  # noqa pylint: disable=invalid-name
   """Checks what role assignee has in the context of
   a workflow. If he has none he gets the Workflow Member role."""
-  if not assignee:
+  if not obj.contact:
     return
 
-  if any(assignee == wp.person for wp in workflow.workflow_people):
+  if not obj.is_contact_workflow_person:
+    obj.workflow.add_workflow_person(obj.contact, 'WorkflowMember')
     return
 
-  # Check if assignee is mapped to the Workflow
-  workflow_people = models.WorkflowPerson.query.filter(
-      models.WorkflowPerson.workflow_id == workflow.id,
-      models.WorkflowPerson.person_id == assignee.id).count()
-  if not workflow_people:
-    models.WorkflowPerson(
-        person=assignee,
-        workflow=workflow,
-        context=workflow.context
-    )
-
-  # Check if assignee has a role assignment
-  user_roles = UserRole.query.filter(
-      UserRole.context_id == workflow.context_id,
-      UserRole.person_id == assignee.id).count()
-  if not user_roles:
-    workflow_member_role = _find_role('WorkflowMember')
-    UserRole(
-        person=assignee,
-        role=workflow_member_role,
-        context=workflow.context,
-        modified_by=get_current_user(),
-    )
+  if not obj.is_contact_has_wf_user_role:
+    obj.workflow.add_user_role(obj.contact, 'WorkflowMember')
 
 
 def start_end_date_validator(tgt):
   if tgt.start_date > tgt.end_date:
-      raise ValueError('End date can not be behind Start date')
+    raise ValueError('End date can not be behind Start date')
 
   if max(tgt.start_date.isoweekday(),
          tgt.end_date.isoweekday()) > all_models.Workflow.WORK_WEEK_LEN:
@@ -480,7 +460,7 @@ def start_end_date_validator(tgt):
       raise ValueError("Daily tasks cannot be started or stopped on weekend")
 
 
-def calculate_new_next_cycle_start_date(workflow):
+def calculate_new_next_cycle_start_date(workflow):  # noqa pylint: disable=invalid-name
   if not workflow.unit or not workflow.repeat_every:
     return
   if workflow.status != workflow.ACTIVE:
@@ -502,7 +482,7 @@ def calculate_new_next_cycle_start_date(workflow):
 def handle_task_group_task_put_post(sender, obj=None, src=None, service=None):  # noqa pylint: disable=unused-argument
   start_end_date_validator(obj)
   if inspect(obj).attrs.contact.history.has_changes():
-    ensure_assignee_is_workflow_member(obj.task_group.workflow, obj.contact)
+    ensure_assignee_is_workflow_member(obj)
 
   # If relative days were change we must update workflow next cycle start date
   if inspect(obj).attrs.start_date.history.has_changes():
@@ -532,7 +512,7 @@ def handle_task_group_post(sender, obj=None, src=None, service=None):  # noqa py
     )
     obj.title = source_task_group.title + ' (copy ' + str(obj.id) + ')'
 
-  ensure_assignee_is_workflow_member(obj.workflow, obj.contact)
+  ensure_assignee_is_workflow_member(obj)
   calculate_new_next_cycle_start_date(obj.workflow)
 
 
@@ -547,12 +527,12 @@ def handle_task_group_delete(sender, obj=None, src=None, service=None):  # noqa 
 @signals.Restful.model_put.connect_via(models.TaskGroup)
 def handle_task_group_put(sender, obj=None, src=None, service=None):  # noqa pylint: disable=unused-argument
   if inspect(obj).attrs.contact.history.has_changes():
-    ensure_assignee_is_workflow_member(obj.workflow, obj.contact)
+    ensure_assignee_is_workflow_member(obj)
   calculate_new_next_cycle_start_date(obj.workflow)
 
 
 @signals.Restful.model_deleted.connect_via(models.CycleTaskGroupObjectTask)
-def handle_cycle_task_group_object_task_delete(sender, obj=None,
+def handle_cycle_task_group_object_task_delete(sender, obj=None,  # noqa pylint: disable=invalid-name
                                                src=None, service=None):  # noqa pylint: disable=unused-argument
   """Update cycle dates and statuses"""
   db.session.flush()
@@ -560,11 +540,11 @@ def handle_cycle_task_group_object_task_delete(sender, obj=None,
 
 
 @signals.Restful.model_put.connect_via(models.CycleTaskGroupObjectTask)
-def handle_cycle_task_group_object_task_put(
+def handle_cycle_task_group_object_task_put(  # noqa pylint: disable=invalid-name
         sender, obj=None, src=None, service=None):  # noqa pylint: disable=unused-argument
 
   if inspect(obj).attrs.contact.history.has_changes():
-    ensure_assignee_is_workflow_member(obj.cycle.workflow, obj.contact)
+    ensure_assignee_is_workflow_member(obj)
 
   if any([inspect(obj).attrs.start_date.history.has_changes(),
           inspect(obj).attrs.end_date.history.has_changes()]):
@@ -605,11 +585,11 @@ def handle_cycle_object_status(
 
 
 @signals.Restful.model_posted.connect_via(models.CycleTaskGroupObjectTask)
-def handle_cycle_task_group_object_task_post(
+def handle_cycle_task_group_object_task_post(  # noqa pylint: disable=invalid-name
         sender, obj=None, src=None, service=None):  # noqa pylint: disable=unused-argument
 
   if obj.cycle.workflow.kind != "Backlog":
-    ensure_assignee_is_workflow_member(obj.cycle.workflow, obj.contact)
+    ensure_assignee_is_workflow_member(obj)
   update_cycle_dates(obj.cycle)
 
   Signals.status_change.send(
@@ -718,24 +698,6 @@ def handle_cycle_task_status_change(sender, obj=None, new_status=None,
       obj.verified_date = None
 
 
-def _get_or_create_personal_context(user):
-  """Get or create personal context.
-
-  Args:
-      user: User instance.
-  Returns:
-      Personal context instance.
-  """
-  personal_context = user.get_or_create_object_context(
-      context=1,
-      name='Personal Context for {0}'.format(user.id),
-      description='',
-  )
-  personal_context.modified_by = get_current_user()
-  db.session.add(personal_context)
-  return personal_context
-
-
 def _find_role(role_name):
   """Find role by its name.
 
@@ -796,43 +758,35 @@ def handle_workflow_post(sender, obj=None, src=None, service=None):
 
   db.session.flush()
   # get the personal context for this logged in user
-  user = get_current_user()
-  personal_context = _get_or_create_personal_context(user)
-  context = obj.build_object_context(
-      context=personal_context,
-      name='{object_type} Context {timestamp}'.format(
-          object_type=service.model.__name__,
-          timestamp=datetime.now()),
-      description='',
-  )
-  context.modified_by = get_current_user()
-
+  current_user = get_current_user()
+  personal_context = current_user.get_or_create_object_context(context=1)
+  context = obj.get_or_create_object_context(personal_context)
+  obj.context = context
+  db.session.add(personal_context)
+  db.session.add(context)
   db.session.add(obj)
   db.session.flush()
-  db.session.add(context)
-  db.session.flush()
-  obj.contexts.append(context)
-  obj.context = context
 
-  # add a user_roles mapping assigning the user creating the workflow
-  # the WorkflowOwner role in the workflow's context.
-  workflow_owner_role = _find_role('WorkflowOwner')
-  user_role = UserRole(
-      person=user,
-      role=workflow_owner_role,
-      context=context,
-      modified_by=get_current_user(),
-  )
-  db.session.add(models.WorkflowPerson(
-      person=user,
-      workflow=obj,
-      context=context,
-      modified_by=get_current_user(),
-  ))
-  # pass along a temporary attribute for logging the events.
-  user_role._display_related_title = obj.title
-  db.session.add(user_role)
-  db.session.flush()
+  if not obj.workflow_people:
+    # add a user_roles mapping assigning the user creating the workflow
+    # the WorkflowOwner role in the workflow's context.
+    workflow_owner_role = _find_role('WorkflowOwner')
+    user_role = UserRole(
+        person=current_user,
+        role=workflow_owner_role,
+        context=context,
+        modified_by=current_user,
+    )
+    db.session.add(models.WorkflowPerson(
+        person=current_user,
+        workflow=obj,
+        context=context,
+        modified_by=current_user,
+    ))
+    # pass along a temporary attribute for logging the events.
+    user_role._display_related_title = obj.title
+    db.session.add(user_role)
+    db.session.flush()
 
   # Create the context implication for Workflow roles to default context
   db.session.add(ContextImplication(
@@ -840,7 +794,7 @@ def handle_workflow_post(sender, obj=None, src=None, service=None):
       context=None,
       source_context_scope='Workflow',
       context_scope=None,
-      modified_by=get_current_user(),
+      modified_by=current_user,
   ))
 
   if not src.get('private'):
@@ -859,14 +813,14 @@ def handle_workflow_post(sender, obj=None, src=None, service=None):
       workflow_member_role = _find_role('WorkflowMember')
       for authorization in source_workflow.context.user_roles:
         # Current user has already been added as workflow owner
-        if authorization.person != user:
+        if authorization.person != current_user:
           db.session.add(UserRole(
               person=authorization.person,
               role=workflow_member_role,
               context=context,
-              modified_by=user))
+              modified_by=current_user))
       for person in source_workflow.people:
-        if person != user:
+        if person != current_user:
           db.session.add(models.WorkflowPerson(
               person=person,
               workflow=obj,

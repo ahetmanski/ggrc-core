@@ -65,8 +65,8 @@ class TestWorkflowObjectColumnDefinitions(TestCase):
     self.assertTrue(vals["Manager"]["mandatory"])
     self.assertIn("type", vals["Manager"])
     self.assertIn("type", vals["Member"])
-    self.assertEqual(vals["Manager"]["type"], "user_role")
-    self.assertEqual(vals["Member"]["type"], "user_role")
+    self.assertEqual(vals["Manager"]["type"], "property")
+    self.assertEqual(vals["Member"]["type"], "property")
 
   def test_task_group_definitions(self):
     """ test default headers for Task Group """
@@ -89,7 +89,7 @@ class TestWorkflowObjectColumnDefinitions(TestCase):
     self.assertTrue(vals["Summary"]["mandatory"])
     self.assertTrue(vals["Assignee"]["mandatory"])
 
-  def test_task_group_task_definitions(self):
+  def test_task_group_task_definitions(self):  # pylint: disable=invalid-name
     """ test default headers for Task Group Task """
     definitions = get_object_column_definitions(wf_models.TaskGroupTask)
     display_names = {val["display_name"] for val in definitions.itervalues()}

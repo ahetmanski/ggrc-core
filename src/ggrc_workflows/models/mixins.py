@@ -11,6 +11,8 @@ from ggrc import db
 from ggrc.models import deferred
 from ggrc.models import mixins
 from ggrc.models import reflection
+from ggrc_basic_permissions import models as bp_models
+from ggrc_workflows.models import workflow_person
 
 
 class StatusValidatedMixin(mixins.Stateful):
@@ -108,3 +110,35 @@ class CycleTaskStatusValidatedMixin(CycleTaskGroupRelatedStatusValidatedMixin):
           "description": "Options are: \n{} ".format('\n'.join(VALID_STATES)),
       },
   }
+
+
+class CheckMappedContact(object):
+  """Adds checks that person is mapped to Workflow or has role in its scope."""
+
+  def _is_contact_mapped_to_workflow(self, dst_type):
+    """Checks that object's contact is a WorkflowPerson or has UserRole in
+    scope of Workflow."""
+    return (
+        any(
+            obj for obj in db.session.new
+            if isinstance(obj, dst_type) and
+            obj.person.id == self.contact.id and
+            obj.context.id == self.workflow.context.id
+        ) or
+        db.session.query(
+            db.session.query(
+                dst_type
+            ).filter(
+                dst_type.person_id == self.contact.id,
+                dst_type.context_id == self.workflow.context_id
+            ).exists()
+        ).scalar()
+    )
+
+  @property
+  def is_contact_workflow_person(self):
+    return self._is_contact_mapped_to_workflow(workflow_person.WorkflowPerson)
+
+  @property
+  def is_contact_has_wf_user_role(self):
+    return self._is_contact_mapped_to_workflow(bp_models.UserRole)

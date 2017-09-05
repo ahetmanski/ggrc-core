@@ -17,11 +17,13 @@ from ggrc.models import mixins
 from ggrc.models.types import JsonType
 from ggrc.models import reflection
 from ggrc_workflows.models.task_group import TaskGroup
+from ggrc_workflows.models import mixins as wf_mixins
 
 
 class TaskGroupTask(mixins.WithContact,
                     mixins.Titled,
                     mixins.Described,
+                    wf_mixins.CheckMappedContact,
                     mixins.Slugged,
                     mixins.Timeboxed,
                     Indexed,
@@ -107,11 +109,11 @@ class TaskGroupTask(mixins.WithContact,
           "display_name": "Task Description",
           "handler_key": "task_description",
       },
-      "contact": {
-          "display_name": "Assignee",
-          "mandatory": True,
-      },
       "secondary_contact": None,
+      "contact": {
+          "mandatory": True,
+          "display_name": "Assignee",
+      },
       "start_date": {
           "display_name": "Start Date",
           "mandatory": True,
@@ -189,3 +191,7 @@ class TaskGroupTask(mixins.WithContact,
 
     target = self.copy_into(_other, columns, contact=contact, **kwargs)
     return target
+
+  @property
+  def workflow(self):
+    return getattr(self.task_group, 'workflow', None)

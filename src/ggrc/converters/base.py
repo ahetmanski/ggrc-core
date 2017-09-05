@@ -52,6 +52,9 @@ class Converter(object):
       "delete",
       "task_type",
       "audit",
+      "workflow",
+      "task_group",
+      "workflow_owner"
   ]
 
   def __init__(self, **kwargs):

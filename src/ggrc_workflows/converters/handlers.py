@@ -7,11 +7,11 @@
 from sqlalchemy import inspection
 
 from ggrc import db
-from ggrc import models
 from ggrc.converters import errors
 from ggrc.converters.handlers import boolean
 from ggrc.converters.handlers import handlers
 from ggrc.converters.handlers import multi_object
+from ggrc.login import get_current_user
 from ggrc_basic_permissions import models as bp_models
 from ggrc_workflows import models as wf_models
 
@@ -91,7 +91,7 @@ class RepeatEveryColumnHandler(handlers.ColumnHandler):
     elif value:
       try:
         value = int(self.raw_value)
-        if not (0 < value < 31):
+        if not 0 < value < 31:
           raise ValueError
       except ValueError:
         self.add_error(errors.WRONG_VALUE_ERROR,
@@ -167,39 +167,125 @@ class TaskTypeColumnHandler(handlers.ColumnHandler):
 class WorkflowPersonColumnHandler(handlers.UserColumnHandler):
 
   def parse_item(self):
-    return self.get_users_list()
+    users = self.get_users_list()
+    if self.row_converter.is_new and self.mandatory and not users:
+      self.add_error(errors.MISSING_VALUE_ERROR, column_name=self.display_name)
+    return users
 
   def set_obj_attr(self):
-    pass
+    if not self.row_converter.obj.context:
+      personal_context = get_current_user().get_or_create_object_context(
+          context=1)
+      workflow_context = self.row_converter.obj.get_or_create_object_context(
+          personal_context)
+      self.row_converter.obj.context = workflow_context
+      db.session.add(personal_context)
+      db.session.add(workflow_context)
+      db.session.add(self.row_converter.obj)
+
+  def _get_people_with_role(self, role_name):
+    """Get people with appropriate role.
+
+    Args:
+      role_name: Workflow user role name
+    """
+    role_query = db.session.query(bp_models.Role.id).filter(
+        bp_models.Role.name == role_name
+    )
+    user_role_query = db.session.query(bp_models.UserRole.person_id).filter(
+        bp_models.UserRole.context_id == self.row_converter.obj.context_id,
+        bp_models.UserRole.role_id.in_(role_query.subquery())
+    )
+    users = db.session.query(bp_models.Person).filter(
+        bp_models.Person.id.in_(user_role_query.subquery())
+    ).all()
+    return users
+
+  def _remove_people_with_role(self, role_name):
+    """Remove people with appropriate role.
+
+    Args:
+      role_name: Workflow user role name
+    """
+    role_query = db.session.query(bp_models.Role.id).filter(
+        bp_models.Role.name == role_name
+    )
+    user_role_query = db.session.query(bp_models.UserRole.person_id).filter(
+        bp_models.UserRole.context_id == self.row_converter.obj.context_id,
+        bp_models.UserRole.role_id.in_(role_query.subquery())
+    )
+    workflow_people_query = db.session.query(wf_models.WorkflowPerson).filter(
+        wf_models.WorkflowPerson.workflow_id == self.row_converter.obj.id,
+        wf_models.WorkflowPerson.person_id.in_(user_role_query.subquery())
+    )
+    workflow_people_query.delete(synchronize_session='fetch')
+    user_role_query.delete(synchronize_session='fetch')
+
+
+class WorkflowOwnerColumnHandler(WorkflowPersonColumnHandler):
 
   def get_value(self):
-    workflow_person = db.session.query(wf_models.WorkflowPerson.person_id)\
-        .filter_by(workflow_id=self.row_converter.obj.id,)
-    workflow_roles = db.session.query(bp_models.UserRole.person_id)\
-        .filter_by(context_id=self.row_converter.obj.context_id)
-    users = models.Person.query.filter(
-        models.Person.id.in_(workflow_person) &
-        models.Person.id.notin_(workflow_roles)
-    )
-    emails = [user.email for user in users]
-    return "\n".join(emails)
+    return '\n'.join(
+        (user.email for user in self._get_people_with_role('WorkflowOwner')))
 
-  def remove_current_people(self):
-    wf_models.WorkflowPerson.query.filter_by(
-        workflow_id=self.row_converter.obj.id).delete()
-
-  def insert_object(self):
+  def set_obj_attr(self):
     if self.dry_run or not self.value:
       return
-    self.remove_current_people()
-    for owner in self.value:
-      workflow_person = wf_models.WorkflowPerson(
-          workflow=self.row_converter.obj,
-          person=owner,
-          context=self.row_converter.obj.context
-      )
-      db.session.add(workflow_person)
-    self.dry_run = True
+    super(WorkflowOwnerColumnHandler, self).set_obj_attr()
+    self._remove_people_with_role('WorkflowOwner')
+    for person in self.value:
+      if not self.row_converter.attrs.get('workflow_member', None):
+        role_query = db.session.query(bp_models.Role.id).filter(
+            bp_models.Role.name == 'WorkflowMember'
+        )
+        user_role_query = db.session.query(bp_models.UserRole).filter(
+            bp_models.UserRole.role_id.in_(role_query.subquery()),
+            bp_models.UserRole.context_id == self.row_converter.obj.context_id,
+            bp_models.UserRole.person_id == person.id
+        )
+        user_role_query.delete(synchronize_session='fetch')
+        wf_people_query = db.session.query(wf_models.WorkflowPerson).filter(
+            wf_models.WorkflowPerson.workflow_id == self.row_converter.obj.id,
+            wf_models.WorkflowPerson.person_id == person.id
+        )
+        wf_people_query.delete(synchronize_session='fetch')
+      self.row_converter.obj.add_workflow_person(person, 'WorkflowOwner')
+
+
+class WorkflowMemberColumnHandler(WorkflowPersonColumnHandler):
+
+  def parse_item(self):
+    users = super(WorkflowMemberColumnHandler, self).parse_item()
+    owners = (self.row_converter.attrs['workflow_owner'].value
+              if 'workflow_owner' in self.row_converter.attrs else [])
+    return list(set(users) - set(owners))
+
+  def get_value(self):
+    return '\n'.join(
+        (user.email for user in self._get_people_with_role('WorkflowMember')))
+
+  def set_obj_attr(self):
+    if self.dry_run or not self.value:
+      return
+    super(WorkflowMemberColumnHandler, self).set_obj_attr()
+    self._remove_people_with_role('WorkflowMember')
+    for person in self.value:
+      self.row_converter.obj.add_workflow_person(person, 'WorkflowMember')
+
+
+class AssigneeColumnHandler(handlers.UserColumnHandler):
+
+  def set_obj_attr(self):
+    if self.dry_run or not self.value:
+      return
+    obj = self.row_converter.obj
+    setattr(obj, self.key, self.value)
+    if not obj.is_contact_workflow_person:
+      obj.workflow.add_workflow_person(self.value, 'WorkflowMember')
+      return
+
+    if not obj.is_contact_has_wf_user_role:
+      obj.workflow.add_user_role(self.value, 'WorkflowMember')
 
 
 class ObjectsColumnHandler(multi_object.ObjectsColumnHandler):
@@ -259,6 +345,15 @@ class TaskDescriptionColumnHandler(handlers.TextareaColumnHandler):
       return ", ".join(self.row_converter.obj.response_options)
 
 
+class ContactColumnHandler(handlers.ForkColumnHandler):
+  default_handler = handlers.UserColumnHandler
+  handler_mapping = {
+      wf_models.TaskGroup: AssigneeColumnHandler,
+      wf_models.TaskGroupTask: AssigneeColumnHandler,
+      wf_models.CycleTaskGroupObjectTask: AssigneeColumnHandler
+  }
+
+
 COLUMN_HANDLERS = {
     "default": {
         "cycle": CycleColumnHandler,
@@ -274,5 +369,8 @@ COLUMN_HANDLERS = {
         "workflow": WorkflowColumnHandler,
         "finished_date": handlers.DateColumnHandler,
         "verified_date": handlers.DateColumnHandler,
+        "workflow_owner": WorkflowOwnerColumnHandler,
+        "workflow_member": WorkflowMemberColumnHandler,
+        "contact": ContactColumnHandler
     },
 }
