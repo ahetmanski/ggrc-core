@@ -11,6 +11,7 @@ from freezegun import freeze_time
 import ddt
 
 from ggrc import db
+from ggrc_workflows import start_recurring_cycles
 from ggrc_workflows.models import Cycle
 from ggrc_workflows.models import CycleTaskGroupObjectTask
 from ggrc_workflows.models import TaskGroup
@@ -37,6 +38,35 @@ class TestWorkflowsCycleGeneration(TestCase):
 
   def tearDown(self):
     pass
+
+  def test_recurring_without_tgts_skip(self):
+    """Test that Active Workflow without TGTs is skipped on cron job"""
+    with freeze_time(dtm.date(2017, 9, 25)):
+      with factories.single_commit():
+        workflow = wf_factories.WorkflowFactory(repeat_every=1,
+                                                unit=Workflow.MONTH_UNIT)
+        workflow_id = workflow.id
+        group = wf_factories.TaskGroupFactory(workflow=workflow)
+        wf_factories.TaskGroupTaskFactory(
+            task_group=group,
+            start_date=dtm.date(2017, 9, 26),
+            end_date=dtm.date(2017, 9, 26) + dtm.timedelta(days=4))
+      self.generator.activate_workflow(workflow)
+      active_wf = db.session.query(Workflow).filter(
+          Workflow.id == workflow_id).one()
+      self.assertEqual(active_wf.next_cycle_start_date, dtm.date(2017, 9, 26))
+      self.assertEqual(active_wf.recurrences, True)
+      self.assertEqual(len(active_wf.cycles), 0)
+      TaskGroupTask.query.delete()
+      db.session.commit()
+
+    with freeze_time(dtm.date(2017, 10, 25)):
+      start_recurring_cycles()
+      active_wf = db.session.query(Workflow).filter(
+          Workflow.id == workflow_id).one()
+      self.assertEqual(active_wf.next_cycle_start_date, dtm.date(2017, 9, 26))
+      self.assertEqual(active_wf.recurrences, True)
+      self.assertEqual(len(active_wf.cycles), 0)
 
   @ddt.data(
       # (expected, setup_date),
